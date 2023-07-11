@@ -1,0 +1,92 @@
+- 👋 Hi, I’m @saintge
+- 👀 I’m interested in ...
+- 🌱 I’m currently learning ...
+- 💞️ I’m looking to collaborate on ...
+- 📫 How to reach me ...
+
+<!---
+saintge/saintge is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+You can click the Preview link to take a look at your changes.
+--->
+import yfinance as yf
+import datetime
+import numpy as np
+import pandas as pd
+from sklearn.preprocessing import MinMaxScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, LSTM
+from pionex import PionexAPI
+import time
+
+API_KEY = "635bbnDGGBwJ3utqk5gd3VkJQu43RvKxire1ZxYqfWMo4HN8UojcaxDpAX1vDnxvFu"
+API_SECRET = "YTnuJR6Ass5AdICsN4awOFDhLVlK8XRxoPRzXyIgLCDlSoCT7nH8eFRmiBewdIHI7"
+
+# Define the ticker symbol and time range
+ticker = "GOLD"
+start_date = "2023-07-11"
+end_date = "2024-07-11"
+
+# Get the historical data from Yahoo Finance
+data = yf.download(ticker, start=start_date, end=end_date)
+
+# Calculate additional features: Moving Average Convergence Divergence (MACD)
+data['26ema'] = data['Close'].ewm(span=26).mean()
+data['12ema'] = data['Close'].ewm(span=12).mean()
+data['MACD'] = data['12ema'] - data['26ema']
+
+# Extract the relevant features for prediction
+relevant_data = data[['Close', 'MACD']].dropna()
+
+# Normalize the data
+scaler = MinMaxScaler(feature_range=(0, 1))
+scaled_data = scaler.fit_transform(relevant_data)
+
+# Prepare the training data
+train_data = scaled_data[:len(scaled_data) - 30]
+x_train = []
+y_train = []
+for i in range(30, len(train_data)):
+    x_train.append(train_data[i-30:i, :])
+    y_train.append(train_data[i, 0])
+x_train, y_train = np.array(x_train), np.array(y_train)
+
+# Build the LSTM model
+model = Sequential()
+model.add(LSTM(units=50, return_sequences=True, input_shape=(x_train.shape[1], x_train.shape[2])))
+model.add(LSTM(units=50))
+model.add(Dense(units=1))
+
+# Compile and train the model
+model.compile(optimizer='adam', loss='mean_squared_error')
+model.fit(x_train, y_train, epochs=10, batch_size=32)
+
+# Initialize the Pionex API
+pionex_api = PionexAPI(api_key=API_KEY, api_secret=API_SECRET)
+
+# Define the trading bot function
+def trading_bot():
+    while True:
+        # Get the current price from the exchange
+        current_price = pionex_api.get_ticker_price(ticker)
+        
+        # Make predictions on the current price
+        input_data = scaled_data[-30:].reshape(1, 30, 2)
+        predicted_price = model.predict(input_data)
+        predicted_price = scaler.inverse_transform(predicted_price)[0][0]
+        
+        # Execute trading strategy based on the predicted prices
+        if current_price < predicted_price:
+            # Place a buy order
+            pionex_api.create_limit_order(ticker, 'BUY', quantity=1, price=current_price)
+            print("Buy order placed at price:", current_price)
+        else:
+            # Place a sell order
+            pionex_api.create_limit_order(ticker, 'SELL', quantity=1, price=current_price)
+            print("Sell order placed at price:", current_price)
+        
+        # Wait for 5 minutes before making the next trade
+        time.sleep(300)
+
+# Call the trading bot function
+trading_bot()
+
